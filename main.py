@@ -1,6 +1,6 @@
-from enum import Enum
-from dataclasses import dataclass
 import random
+from dataclasses import dataclass
+from enum import Enum
 from typing import Optional
 
 
@@ -36,9 +36,13 @@ class PlayerStat:
     n_dices: int
     alive: bool
 
+    def remove_cards(self, indices: list[int]):
+        self.cards = [
+            card for i, card in enumerate(self.cards) if i not in indices
+        ]
+
 
 def create_deck() -> list[Card]:
-
     def normal(power: int) -> Card:
         return Card(CardType.Normal, power=power)
 
@@ -55,14 +59,20 @@ def create_deck() -> list[Card]:
         return Card(CardType.BuffAdd, power=power)
 
     def buff_dice(count: int, multiply: int) -> Card:
-        return Card(CardType.Buffdice, dice_count=count, dice_multiply=multiply)
+        return Card(
+            CardType.BuffDice, dice_count=count, dice_multiply=multiply
+        )
 
     normal_counts = [0, 2, 2, 2, 2, 2, 2, 8, 7, 6, 5, 4, 4]  # => 46
     comb_counts = [0, 1, 1, 2, 2, 3, 3]  # => 60
 
-    deck = sum([[normal(power) for _ in range(normal_counts[power])] for power in range(1, 13)])
+    deck: list[Card] = []
+    for power in range(1, 13):
+        [normal(power) for _ in range(normal_counts[power])]
+
     for combin_id in range(5):
-        deck += sum([[comb(power) for _ in range(comb_counts[power])] for power in range(1, 7)])
+        for power in range(1, 7):
+            deck += [comb(power, combin_id) for _ in range(comb_counts[power])]
 
     deck += [recycle(1) for _ in range(3)]
     deck += [recycle(2) for _ in range(3)]
@@ -103,17 +113,24 @@ class ControlResult:
     success: bool
 
 
-def compute_power(cards: list[Card], maximum: bool) -> tuple(int, list[int]):
+def compute_power(
+    cards: list[Card], maximum: bool = True
+) -> tuple[int, list[int]]:
     power = 0
     dices = []
     for card in cards:
         if card.card_type == CardType.Normal:
+            assert card.power is not None
             power += card.power
         elif card.card_type == CardType.Combinable:
+            assert card.power is not None
             power += card.power
         elif card.card_type == CardType.BuffAdd:
+            assert card.power is not None
             power += card.power
         elif card.card_type == CardType.BuffDice:
+            assert card.dice_count is not None
+            assert card.dice_multiply is not None
             if maximum:
                 power += card.dice_count * card.dice_multiply * 6
             else:
@@ -122,20 +139,24 @@ def compute_power(cards: list[Card], maximum: bool) -> tuple(int, list[int]):
     return power, dices
 
 
+def enumerate_valid_actions(info: VisibleInfo) -> list[Action]:
+    return []
+
+
 class AgentInterface:
-
-    def select_action(info: VisibleInfo) -> Action:
+    def select_action(self, info: VisibleInfo) -> Action:
         raise NotImplementedError
 
-    def select_recycle_cards(info: VisibleInfo) -> list[int]:
+    def select_recycle_cards(self, info: VisibleInfo) -> list[int]:
         raise NotImplementedError
 
-    def receive_result(info: VisibleInfo, control_result: ControlResult) -> None:
+    def receive_result(
+        self, info: VisibleInfo, control_result: ControlResult
+    ) -> None:
         raise NotImplementedError
 
 
 class Game:
-
     def __init__(self):
         self.agents = [
             HumanAgent(),
@@ -146,7 +167,7 @@ class Game:
 
         self.init_game()
 
-    def init_game() -> None:
+    def init_game(self) -> None:
 
         self.deck = create_deck()
         self.stacks = [Stack(0, [], [], None) for i in range(5)]
@@ -155,41 +176,53 @@ class Game:
             PlayerStat(
                 cards=[self.deck.pop() for _ in range(7)],
                 n_dices=3,
-                alive=True
+                alive=True,
             )
             for _ in range(len(self.agents))
         ]
         self.alives = len(self.agents)
 
-    def run_game_loop() -> None:
+    def run_game_loop(self) -> None:
         current_player = 0
         while self.deck:
             if not self.player_stats[current_player].alive:
                 continue
 
             new_card = self.deck.pop()
-            self.player_stats[curent_player].cards.append(new_card)
+            self.player_stats[current_player].cards.append(new_card)
 
             agent = self.agents[current_player]
-            action = agent.select_action(self.create_visible_info(current_player))
+            action = agent.select_action(
+                self.create_visible_info(current_player)
+            )
 
             self.execute_action(current_player, action, agent)
 
-    def create_visible_info(self, cunnret_player: int) -> VisibleInfo:
+    def create_visible_info(self, current_player: int) -> VisibleInfo:
         info = VisibleInfo(
             stacks=self.stacks,
-            cards=self.player_stats[curent_player].cards,
-            n_dices=self.player_stats[curent_player].n_dices,
+            cards=self.player_stats[current_player].cards,
+            n_dices=self.player_stats[current_player].n_dices,
             player_id=current_player,
-            n_other_player_cards=[len(player.cards) for idx, player in enumerate(self.player_stats) if idx != current_player],
-            n_other_player_dices=[player.n_dices for idx, player in enumerate(self.player_stats) if idx != current_player]
+            n_other_player_cards=[
+                len(player.cards)
+                for idx, player in enumerate(self.player_stats)
+                if idx != current_player
+            ],
+            n_other_player_dices=[
+                player.n_dices
+                for idx, player in enumerate(self.player_stats)
+                if idx != current_player
+            ],
         )
         return info
 
-    def execute_action(self, current_player: int, action: Action, agent: AgentInterface) -> None:
+    def execute_action(
+        self, current_player: int, action: Action, agent: AgentInterface
+    ) -> None:
         card_indices = action.card_indices
         if len(card_indices) == 0:
-            self.player_stats[current_player] = False
+            self.player_stats[current_player].alive = False
             self.alives -= 1
             return
 
@@ -199,6 +232,7 @@ class Game:
 
         if len(card_indices) == 1 and card_0.card_type == CardType.Recycle:
             self.player_stats[current_player].remove_cards(card_indices)
+            assert card_0.power is not None
             for _ in range(card_0.power):
                 if not self.deck:
                     return
@@ -209,12 +243,15 @@ class Game:
             return
         elif len(card_indices) == 1 and card_0.card_type == CardType.Recover:
             self.player_stats[current_player].remove_cards(card_indices)
-            while self.deck and len(self.player_stats[current_player].cards) < 7:
+            while (
+                self.deck and len(self.player_stats[current_player].cards) < 7
+            ):
                 self.player_stats[current_player].cards.append(self.deck.pop())
             return
 
         played_cards = [cards[index] for index in card_indices]
-        power, dices = compute_power(played_cards)
+        power, dices = compute_power(played_cards, maximum=False)
+        assert action.stack_index is not None
         if self.stacks[action.stack_index].total_power >= power:
             success = False
         else:
@@ -226,17 +263,14 @@ class Game:
             )
             success = True
 
-        control_result = ControlResult(
-            dices,
-            total_power,
-            success
+        control_result = ControlResult(dices, power, success)
+        agent.receive_result(
+            self.create_visible_info(current_player), control_result
         )
-        agent.receive_result(self.create_visible_info(player_index),
-                             control_result)
 
 
 def main():
-
+    pass
 
 
 if __name__ == "__main__":
